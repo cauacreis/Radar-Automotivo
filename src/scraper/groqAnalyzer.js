@@ -12,16 +12,17 @@ if (!config.groqApiKey) {
 
 const groq = new Groq({ apiKey: config.groqApiKey });
 
-const SYSTEM_PROMPT = `Você é um mecânico sênior da Toyota. Analise a descrição deste anúncio. Responda em formato JSON com dois campos: "compativelHilux2006" (boolean) e "motivo" (string curta explicando por que serve ou por que é falsa/spam).`;
-
 /**
- * Analisa uma peça automotiva com o modelo llama-3.1-8b-instant via Groq.
- * Retorna um objeto com `compativelHilux2006` (boolean) e `motivo` (string).
+ * Analisa a compatibilidade de um produto com o termo de busca usando Groq (llama-3.1-8b-instant).
+ * Retorna um objeto com `compativel` (boolean) e `motivo` (string).
  *
  * @param {{ titulo: string, descricaoCompleta: string }} produto
- * @returns {Promise<{ compativelHilux2006: boolean, motivo: string }>}
+ * @param {string} termoBusca
+ * @returns {Promise<{ compativel: boolean, motivo: string }>}
  */
-export async function analisarPeca(produto) {
+export const analyzeCompatibilidade = async (produto, termoBusca) => {
+  const systemPrompt = `Você é um especialista em tecnologia e mecânica. O usuário está buscando especificamente por: "${termoBusca}". Analise a descrição deste anúncio e determine se ele é EXATAMENTE o que o usuário quer. Responda em JSON com "compativel" (boolean) e "motivo" (string).`;
+
   const userMessage = `
 Título do anúncio: ${produto.titulo}
 
@@ -33,11 +34,11 @@ ${produto.descricaoCompleta ?? 'Sem descrição disponível.'}
     const completion = await groq.chat.completions.create({
       model: 'llama-3.1-8b-instant',
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: systemPrompt },
         { role: 'user',   content: userMessage   },
       ],
       response_format: { type: 'json_object' }, // força saída JSON
-      temperature: 0.1, // baixa temperatura = respostas mais precisas e consistentes
+      temperature: 0.1,
       max_tokens: 256,
     });
 
@@ -46,12 +47,11 @@ ${produto.descricaoCompleta ?? 'Sem descrição disponível.'}
 
     // Garante que os campos existem com tipos corretos
     return {
-      compativelHilux2006: Boolean(resultado.compativelHilux2006),
+      compativel: Boolean(resultado.compativel),
       motivo: String(resultado.motivo ?? 'Sem motivo retornado.'),
     };
 
   } catch (err) {
-    // Erros de rede, parsing ou API — não travam o fluxo
     if (err instanceof SyntaxError) {
       console.error(`   ⚠️  Groq retornou JSON inválido: ${err.message}`);
     } else {
@@ -59,8 +59,8 @@ ${produto.descricaoCompleta ?? 'Sem descrição disponível.'}
     }
 
     return {
-      compativelHilux2006: false,
+      compativel: false,
       motivo: `Erro na análise: ${err.message.slice(0, 80)}`,
     };
   }
-}
+};

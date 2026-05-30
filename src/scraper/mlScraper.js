@@ -77,13 +77,13 @@ async function extrairDescricao(page, link, titulo) {
  * 1. Busca os N primeiros produtos na página de resultados
  * 2. Navega em cada link e extrai a descrição completa
  *
- * @param {string} [query] - Termo de busca. Usa o padrão da config se omitido.
+ * @param {string} termoBusca - Termo de busca.
  * @returns {Promise<Array<{titulo, preco, link, descricaoCompleta}>>}
  */
-export async function mlScraper(query = config.scraper.searchQuery) {
+export const scrapeMercadoLivre = async (termoBusca) => {
   const { headless, timeout, maxResults } = config.scraper;
 
-  console.log(`\n🔍 Iniciando busca: "${query}"`);
+  console.log(`\n🔍 Iniciando busca: "${termoBusca}"`);
   console.log('🚀 Abrindo navegador (modo stealth)...\n');
 
   const browser = await puppeteerExtra.launch({
@@ -101,7 +101,7 @@ export async function mlScraper(query = config.scraper.searchQuery) {
 
   try {
     // ── Etapa 1: Página de busca ──────────────────────────────────────────
-    const slug = query
+    const slug = termoBusca
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-zA-Z0-9\s]/g, '')

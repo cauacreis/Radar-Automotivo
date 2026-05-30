@@ -1,88 +1,107 @@
-import { mlScraper } from './scraper/mlScraper.js';
-import { analisarPeca } from './scraper/groqAnalyzer.js';
+import TelegramBot from 'node-telegram-bot-api';
+import { config } from './config/index.js';
+import { scrapeMercadoLivre } from './scraper/mlScraper.js';
+import { analyzeCompatibilidade } from './scraper/groqAnalyzer.js';
 import { sendTelegramAlert } from './notifier/telegramNotifier.js';
 
-async function main() {
-  console.log('='.repeat(60));
-  console.log('  🚗  RADAR AUTOMOTIVO — Scraper + IA + Telegram  v3.0');
-  console.log('='.repeat(60));
+// ─────────────────────────────────────────────────────────────
+// Validações Iniciais de Variáveis de Ambiente
+// ─────────────────────────────────────────────────────────────
+if (!config.telegram.botToken || !config.telegram.chatId) {
+  console.error('❌ TELEGRAM_BOT_TOKEN ou TELEGRAM_CHAT_ID não configurados no .env. Configure para rodar o bot.');
+  process.exit(1);
+}
 
-  // ── 1. Scraping: busca + extração profunda ─────────────────────────────
-  const produtos = await mlScraper();
+// ─────────────────────────────────────────────────────────────
+// Inicialização do Bot
+// ─────────────────────────────────────────────────────────────
+const bot = new TelegramBot(config.telegram.botToken, { polling: true });
 
-  if (!produtos?.length) {
-    console.warn('⚠️  Nenhum produto encontrado. Encerrando.');
+console.log('='.repeat(60));
+console.log('  🤖 RADAR AUTOMOTIVO — Telegram Bot Interativo Ativo');
+console.log(`  📡 Aguardando mensagens no Chat ID autorizado: ${config.telegram.chatId}`);
+console.log('='.repeat(60) + '\n');
+
+// ─────────────────────────────────────────────────────────────
+// Listener de Mensagens
+// ─────────────────────────────────────────────────────────────
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const termo = msg.text?.trim();
+
+  // 1. Segurança: validação do Chat ID
+  if (String(chatId) !== String(config.telegram.chatId)) {
+    console.warn(`⚠️ Tentativa de acesso não autorizada. Remetente ID: ${chatId}`);
+    try {
+      await bot.sendMessage(chatId, '❌ Acesso não autorizado. Este bot é privado.');
+    } catch (err) {
+      console.error(`Erro ao responder invasor: ${err.message}`);
+    }
     return;
   }
 
-  // ── 2. Análise semântica com Groq ──────────────────────────────────────
-  console.log('🧠 Analisando compatibilidade com IA (Groq / llama-3.1-8b-instant)...\n');
+  // Ignora mensagens vazias ou que comecem com barra (comandos) se não for /start
+  if (!termo) return;
 
-  const resultados = [];
-
-  for (let i = 0; i < produtos.length; i++) {
-    const produto = produtos[i];
-    console.log(`🔬 [${i + 1}/${produtos.length}] Analisando: ${produto.titulo.slice(0, 50)}...`);
-
-    const analise = await analisarPeca(produto);
-
-    const icone = analise.compativelHilux2006 ? '✅' : '❌';
-    console.log(`   ${icone} Compatível: ${analise.compativelHilux2006} | ${analise.motivo}\n`);
-
-    const resultado = { ...produto, ...analise };
-    resultados.push(resultado);
-
-    // ── Notificação Telegram (apenas para peças aprovadas) ─────────────
-    if (analise.compativelHilux2006) {
-      process.stdout.write('   📱 Enviando alerta Telegram...');
-      await sendTelegramAlert(resultado);
+  if (termo.startsWith('/')) {
+    if (termo === '/start') {
+      await bot.sendMessage(
+        chatId,
+        '🚗 *Bem-vindo ao Radar Automotivo\\!* 🚗\n\nEnvie o termo que deseja pesquisar no Mercado Livre e farei a verificação com IA em tempo real\\.',
+        { parse_mode: 'MarkdownV2' }
+      );
     }
+    return;
   }
 
-  // ── 3. Exibe apenas as peças compatíveis ───────────────────────────────
-  const compativeis = resultados.filter(r => r.compativelHilux2006);
+  // 2. Fluxo Principal da busca
+  console.log(`\n💬 Mensagem recebida: "${termo}"`);
+  
+  try {
+    // Resposta imediata conforme especificado
+    await bot.sendMessage(chatId, `🔍 Iniciando varredura para: ${termo}`);
 
-  console.log('='.repeat(60));
-  console.log(`\n📊 ${compativeis.length} peça(s) COMPATÍVEL(IS) com Hilux 2006:\n`);
+    // Executa scraping
+    const produtos = await scrapeMercadoLivre(termo);
 
-  if (compativeis.length === 0) {
-    console.warn('⚠️  Nenhuma peça compatível encontrada nos resultados.');
-  } else {
-    // Tabela formatada — colunas relevantes apenas
-    console.table(
-      compativeis.map((p, idx) => ({
-        '#': idx + 1,
-        'Título': p.titulo.slice(0, 45) + (p.titulo.length > 45 ? '…' : ''),
-        'Preço': p.preco,
-        'Motivo IA': p.motivo.slice(0, 60) + (p.motivo.length > 60 ? '…' : ''),
-        'Link': p.link.split('/').slice(3, 5).join('/'), // versão curta do link
-      }))
+    if (!produtos || produtos.length === 0) {
+      await bot.sendMessage(chatId, `⚠️ Nenhum produto encontrado no Mercado Livre para: "${termo}".`);
+      return;
+    }
+
+    await bot.sendMessage(chatId, `🧠 Varrendo descrições com IA. Processando ${produtos.length} anúncios...`);
+
+    let encontradosCount = 0;
+
+    for (let i = 0; i < produtos.length; i++) {
+      const produto = produtos[i];
+      console.log(`🔬 [${i + 1}/${produtos.length}] Analisando com Groq: ${produto.titulo.slice(0, 50)}...`);
+
+      const analise = await analyzeCompatibilidade(produto, termo);
+
+      const icone = analise.compativel ? '✅' : '❌';
+      console.log(`   ${icone} Compatível: ${analise.compativel} | ${analise.motivo}\n`);
+
+      if (analise.compativel) {
+        encontradosCount++;
+        const resultado = { ...produto, ...analise };
+        await sendTelegramAlert(bot, chatId, resultado);
+      }
+    }
+
+    // Resumo final enviado ao usuário
+    await bot.sendMessage(
+      chatId,
+      `🏁 *Varredura concluída\\!*\n🎯 Itens compatíveis encontrados: *${encontradosCount}* de *${produtos.length}* analisados\\.`,
+      { parse_mode: 'MarkdownV2' }
     );
 
-    // Log dos links completos separado
-    console.log('\n🔗 Links completos:\n');
-    compativeis.forEach((p, i) => {
-      console.log(`  [${i + 1}] ${p.titulo.slice(0, 45)}`);
-      console.log(`      ${p.link}\n`);
-    });
+  } catch (err) {
+    console.error(`❌ Erro no pipeline para o termo "${termo}":`, err);
+    try {
+      await bot.sendMessage(chatId, `❌ Erro na varredura para "${termo}":\n\`${err.message}\``);
+    } catch (sendErr) {
+      console.error('Erro ao enviar mensagem de erro:', sendErr.message);
+    }
   }
-
-  // Exibe também as rejeitadas para transparência
-  const rejeitadas = resultados.filter(r => !r.compativelHilux2006);
-  if (rejeitadas.length > 0) {
-    console.log(`\n❌ ${rejeitadas.length} peça(s) rejeitada(s) pela IA:\n`);
-    rejeitadas.forEach(p => {
-      console.log(`  • ${p.titulo.slice(0, 50)}`);
-      console.log(`    Motivo: ${p.motivo}\n`);
-    });
-  }
-
-  console.log('='.repeat(60));
-  console.log(`✅ Análise concluída — ${resultados.length} peças analisadas, ${compativeis.length} compatíveis.`);
-  console.log('='.repeat(60) + '\n');
-}
-
-main().catch(err => {
-  console.error('\n❌ Erro fatal:', err.message);
-  process.exit(1);
 });
