@@ -13,6 +13,12 @@ if (!config.groqApiKey) {
 const groq = new Groq({ apiKey: config.groqApiKey });
 
 /**
+ * Aguarda um tempo antes de continuar — usado no retry de rate limit.
+ * @param {number} ms
+ */
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+/**
  * Analisa a compatibilidade de um produto com o termo de busca usando Groq (llama-3.1-8b-instant).
  * Retorna um objeto com `compativel` (boolean) e `motivo` (string).
  *
@@ -30,37 +36,49 @@ Descrição:
 ${produto.descricaoCompleta ?? 'Sem descrição disponível.'}
 `.trim();
 
-  try {
-    const completion = await groq.chat.completions.create({
-      model: 'llama-3.1-8b-instant',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user',   content: userMessage   },
-      ],
-      response_format: { type: 'json_object' }, // força saída JSON
-      temperature: 0.1,
-      max_tokens: 256,
-    });
+  const MAX_TENTATIVAS = 4;
 
-    const raw = completion.choices[0]?.message?.content ?? '{}';
-    const resultado = JSON.parse(raw);
+  for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
+    try {
+      const completion = await groq.chat.completions.create({
+        model: 'llama-3.1-8b-instant',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: userMessage   },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.1,
+        max_tokens: 256,
+      });
 
-    // Garante que os campos existem com tipos corretos
-    return {
-      compativel: Boolean(resultado.compativel),
-      motivo: String(resultado.motivo ?? 'Sem motivo retornado.'),
-    };
+      const raw = completion.choices[0]?.message?.content ?? '{}';
+      const resultado = JSON.parse(raw);
 
-  } catch (err) {
-    if (err instanceof SyntaxError) {
-      console.error(`   ⚠️  Groq retornou JSON inválido: ${err.message}`);
-    } else {
-      console.error(`   ⚠️  Erro no Groq: ${err.message}`);
+      return {
+        compativel: Boolean(resultado.compativel),
+        motivo: String(resultado.motivo ?? 'Sem motivo retornado.'),
+      };
+
+    } catch (err) {
+      // Rate limit (429) — backoff exponencial antes de tentar de novo
+      const is429 = err.message?.includes('429') || err.status === 429;
+      if (is429 && tentativa < MAX_TENTATIVAS) {
+        const espera = tentativa * 8000; // 8s, 16s, 24s
+        console.warn(`   ⏳ Rate limit Groq. Tentativa ${tentativa}/${MAX_TENTATIVAS}. Aguardando ${espera / 1000}s...`);
+        await sleep(espera);
+        continue;
+      }
+
+      if (err instanceof SyntaxError) {
+        console.error(`   ⚠️  Groq retornou JSON inválido: ${err.message}`);
+      } else {
+        console.error(`   ⚠️  Erro no Groq: ${err.message}`);
+      }
+
+      return {
+        compativel: false,
+        motivo: `Erro na análise: ${err.message.slice(0, 80)}`,
+      };
     }
-
-    return {
-      compativel: false,
-      motivo: `Erro na análise: ${err.message.slice(0, 80)}`,
-    };
   }
 };
