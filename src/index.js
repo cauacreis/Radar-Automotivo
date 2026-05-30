@@ -1,9 +1,10 @@
 import { mlScraper } from './scraper/mlScraper.js';
 import { analisarPeca } from './scraper/groqAnalyzer.js';
+import { sendTelegramAlert } from './notifier/telegramNotifier.js';
 
 async function main() {
   console.log('='.repeat(60));
-  console.log('    🚗  RADAR AUTOMOTIVO — Scraper + IA  v2.0');
+  console.log('  🚗  RADAR AUTOMOTIVO — Scraper + IA + Telegram  v3.0');
   console.log('='.repeat(60));
 
   // ── 1. Scraping: busca + extração profunda ─────────────────────────────
@@ -28,7 +29,14 @@ async function main() {
     const icone = analise.compativelHilux2006 ? '✅' : '❌';
     console.log(`   ${icone} Compatível: ${analise.compativelHilux2006} | ${analise.motivo}\n`);
 
-    resultados.push({ ...produto, ...analise });
+    const resultado = { ...produto, ...analise };
+    resultados.push(resultado);
+
+    // ── Notificação Telegram (apenas para peças aprovadas) ─────────────
+    if (analise.compativelHilux2006) {
+      process.stdout.write('   📱 Enviando alerta Telegram...');
+      await sendTelegramAlert(resultado);
+    }
   }
 
   // ── 3. Exibe apenas as peças compatíveis ───────────────────────────────
